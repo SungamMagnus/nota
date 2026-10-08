@@ -1,0 +1,9 @@
+build/
+build-*/
+.DS_Store
+*.mid
+*.wav
+training/data/
+training/runs/
+__pycache__/
+dist/
