@@ -9,11 +9,4 @@ __pycache__/
 dist/
 training/.venv/
 training/data/
-maxforlive/max-sdk/
-maxforlive/build/
-maxforlive/externals/
-maxforlive/package/nota/externals/
-maxforlive/dist/
-# local Max test patches (they write to machine-specific paths)
-maxforlive/tests/*.maxpat
 training/

@@ -46,10 +46,6 @@ AU) — see [Ableton's article](https://help.ableton.com/hc/en-us/articles/20907
 3. On the track that should play the notes: *MIDI From* → the Nota track →
    *Nota* (channel chooser). Set Monitor to *In*.
 
-**Simpler in Live: Max for Live.** `maxforlive/` has two devices that make Nota behave like a MIDI effect: *Nóta source* on the
-audio track and *Nóta destination* before the instrument on the instrument track, which can also play chords and a
-random scale-note flourish in Live's scale or one you choose (see `maxforlive/README.md`).
-
 Other hosts that route plug-in MIDI output and sidechains (Bitwig, Reaper) should work the same way.
 
 ## MPE mode

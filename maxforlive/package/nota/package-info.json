@@ -1,8 +1,0 @@
-{
-	"name" : "nota",
-	"version" : "0.1.0",
-	"author" : "Sungam",
-	"description" : "Nota: monophonic audio to MIDI for bass and voice (nota~ external + Max for Live devices)",
-	"max_version_min" : "8.2.0",
-	"os" : { "macintosh" : { "platforms" : [ "x86_64", "arm64" ] } }
-}
