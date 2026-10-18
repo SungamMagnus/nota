@@ -4,8 +4,7 @@
 Produces dist/Nota-for-Live/ and dist/Nota-for-Live.zip with two self-contained (frozen) .amxd files and a short README.
 Frozen = the nota~ external and the scripts are embedded in the device, so the people you share it with install nothing else.
 
-The external is built WITHOUT the trained neural weights (NOTA_NEURAL=OFF): nothing derived from the training recordings is
-in the files, and the AI Assist control is left out of the share variant of the source device.
+Nothing in the files depends on the machine they were built on, and the external contains no trained model.
 """
 import shutil
 import subprocess
@@ -14,7 +13,7 @@ import zipfile
 from pathlib import Path
 
 HERE = Path(__file__).parent
-BUILD = HERE / "build-share"
+BUILD = HERE / "build"
 DIST = HERE / "dist" / "Nota-for-Live"
 sys.path.insert(0, str(HERE))
 import freeze  # noqa: E402
@@ -45,7 +44,6 @@ If macOS says the device cannot be opened
 
 Notes
   * Hover a control in Live (Info View) for a one-line explanation.
-  * This version does not include the experimental AI Assist.
 """
 
 
@@ -54,24 +52,19 @@ def run(*cmd):
 
 
 def main():
-    run(sys.executable, HERE / "make_devices.py", "--share")
+    run(sys.executable, HERE / "make_devices.py")
     if not (BUILD / "CMakeCache.txt").exists():
-        sdk = HERE / "build" / "_deps" / "max-sdk-base-src"
-        extra = [f"-DFETCHCONTENT_SOURCE_DIR_MAX-SDK-BASE={sdk}"] if sdk.exists() else []
-        run("cmake", "-S", HERE, "-B", BUILD, "-DNOTA_NEURAL=OFF", f"-DC74_LIBRARY_OUTPUT_DIRECTORY={BUILD / 'externals'}", *extra)
+        run("cmake", "-S", HERE, "-B", BUILD)
     run("cmake", "--build", BUILD, "-j")
-    mxo = BUILD / "externals" / "nota~.mxo"
-    exe = mxo / "Contents" / "MacOS" / "nota~"
-    if exe.stat().st_size > 800_000:
-        sys.exit(f"{exe} is {exe.stat().st_size} bytes: it looks like it still contains the neural weights (NOTA_NEURAL=OFF?)")
+    mxo = HERE / "externals" / "nota~.mxo"
     run("codesign", "--force", "--sign", "-", mxo)   # ad-hoc: Apple silicon refuses unsigned code
 
     if DIST.parent.exists():
         shutil.rmtree(DIST.parent)
     DIST.mkdir(parents=True)
     js = HERE / "package" / "nota" / "javascript"
-    freeze.freeze(HERE / "devices-share" / "Nóta source.amxd", DIST / "Nóta source.amxd", [mxo], [js / "nota_info.js", js / "nota_scope.js"])
-    freeze.freeze(HERE / "devices-share" / "Nóta destination.amxd", DIST / "Nóta destination.amxd", [], [js / "nota_dest.js"])
+    freeze.freeze(HERE / "devices" / "Nóta source.amxd", DIST / "Nóta source.amxd", [mxo], [js / "nota_info.js", js / "nota_scope.js"])
+    freeze.freeze(HERE / "devices" / "Nóta destination.amxd", DIST / "Nóta destination.amxd", [], [js / "nota_dest.js"])
     (DIST / "README.txt").write_text(README, encoding="utf-8")
 
     zpath = DIST.parent / "Nota-for-Live.zip"

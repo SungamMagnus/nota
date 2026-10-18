@@ -1,14 +1,5 @@
 #include "Fft.h"
 #include "Eval.h"
-#include "PickerNet.h"
-// The picker parity test needs the reference vectors generated from the trained network (training/export_model.py). They are not
-// part of the public repository, so the test is skipped when they, or the weights, are absent.
-#if defined(__has_include)
-#if __has_include("picker_reference.h")
-#include "picker_reference.h"
-#define NOTA_HAVE_PICKER_REF 1
-#endif
-#endif
 #include "PitchTracker.h"
 #include "TestSignals.h"
 
@@ -513,36 +504,6 @@ static void testMpe()
     }
 }
 
-// The C++ forward pass must reproduce PyTorch's logits for real feature frames (generated reference).
-static void testPickerParity()
-{
-#if defined(NOTA_HAVE_PICKER_REF) && !defined(NOTA_NO_NEURAL)
-    std::printf("picker parity\n");
-    PickerNet net;
-    net.reset();
-    float logits[PickerNet::kOut];
-    double worst = 0.0;
-    int argmaxMismatch = 0;
-    for (int h = 0; h < kRefHops; ++h)
-    {
-        net.step(kRefInput + h * PickerNet::kIn, logits);
-        int a = 0, b = 0;
-        for (int i = 0; i < PickerNet::kOut; ++i)
-        {
-            const float ref = kRefLogits[h * PickerNet::kOut + i];
-            worst = std::max(worst, static_cast<double>(std::abs(logits[i] - ref)));
-            a = logits[i] > logits[a] ? i : a;
-            b = ref > kRefLogits[h * PickerNet::kOut + b] ? i : b;
-        }
-        argmaxMismatch += a != b;
-    }
-    CHECK(worst < 2e-3, "largest logit difference to PyTorch: %g", worst);
-    CHECK(argmaxMismatch == 0, "%d hops pick a different class than PyTorch", argmaxMismatch);
-#else
-    std::printf("picker parity (skipped: no trained weights / reference vectors in this build)\n");
-#endif
-}
-
 // The hard-scenario suite (tools/Scenarios.h): legato, slides, distortion, hum, reverb, vibrato...
 // These are floors, not targets - tighten them when the tracker improves.
 static void testScenarioSuite()
@@ -581,7 +542,6 @@ int main()
     testPitchBend();
     testVelocity();
     testMpe();
-    testPickerParity();
     testScenarioSuite();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);

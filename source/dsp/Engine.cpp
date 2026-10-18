@@ -10,10 +10,6 @@ namespace
 {
 constexpr float kAbsoluteMinHz = 26.0f;
 constexpr float kAbsoluteMaxHz = 1300.0f;
-constexpr float kHybridNetMinHz = 160.0f;       // the picker's pitch is used only at or above this ...
-constexpr float kHybridClassicalMinHz = 110.0f; // ... and only if the classical tracker is not already in the bass range
-constexpr float kNetCreateMinP = 0.97f;         // the picker may start a pitch the classical tracker missed only this surely
-constexpr float kNetVetoP = 0.25f;              // ... and silences a classical pitch only when this sure it is not pitched
 } // namespace
 
 void Engine::prepare(double sampleRate)
@@ -44,7 +40,6 @@ void Engine::reset()
     lp2_.reset();
     hp_.reset();
     tracker_.reset();
-    net_.reset();
     notes_.reset();
     hopCounter_ = 0;
     nextOut_ = 1.0;
@@ -154,101 +149,9 @@ void Engine::runHop(int sampleOffset, EventList& out)
     PitchFrame f;
     f.levelDb = levelDb;
 
-    // The classical tracker always runs: it is the neural picker's prior (and its fallback), and for training
-    // tools it is part of the feature vector. Features cost four more FFT pairs, so only when there is signal.
-    // The picker only runs if its weights were trained for this exact feature layout.
-    const bool useNet = kNeuralBuilt && params_.neural && PickerNet::kIn == kFeatureDim;
-    const bool wantFeatures = useNet || (sink_ != nullptr && sink_->wantsFeatures());
-    PitchCandidate classical;
-    if (levelDb >= effGate)
-        classical = tracker_.analyze();
-
-    if (wantFeatures)
-    {
-        constexpr int kNsdf = PitchTracker::kFeatureScales * PitchTracker::kFeatureBins;
-        std::fill(features_, features_ + kFeatureDim, 0.0f);
-        if (levelDb >= effGate - 10.0f)
-            tracker_.features(features_);
-
-        if (classical.valid)
-        {
-            // A one-bin-wide bump at the classical tracker's lag on the same log-lag grid.
-            const float pos = std::log(classical.lag / PitchTracker::kFeatureMinLag)
-                            / std::log(PitchTracker::kFeatureMaxLag / PitchTracker::kFeatureMinLag) * static_cast<float>(PitchTracker::kFeatureBins - 1);
-            for (int b = 0; b < kPriorBins; ++b)
-            {
-                const float d = static_cast<float>(b) - pos;
-                features_[kNsdf + b] = std::exp(-0.5f * d * d);
-            }
-            features_[kNsdf + kPriorBins] = std::clamp(classical.clarity, 0.0f, 1.0f);
-        }
-        features_[kFeatureDim - 1] = std::clamp((levelDb + 90.0f) / 90.0f, 0.0f, 1.0f);
-    }
-
     PitchCandidate c;
-    if (useNet)
-    {
-        net_.step(features_, netLogits_);
-        // Softmax over the 97 classes; the last is "unvoiced".
-        float mx = netLogits_[0];
-        for (int i = 1; i < PickerNet::kOut; ++i)
-            mx = std::max(mx, netLogits_[i]);
-        float sum = 0.0f, best = -1.0f;
-        int bestBin = 0;
-        for (int i = 0; i < PickerNet::kOut; ++i)
-        {
-            const float e = std::exp(netLogits_[i] - mx);
-            sum += e;
-            if (i < PickerNet::kUnvoiced && e > best)
-            {
-                best = e;
-                bestBin = i;
-            }
-        }
-        const float pVoiced = 1.0f - std::exp(netLogits_[PickerNet::kUnvoiced] - mx) / sum;
-        const float coarse = PitchTracker::featureLag(bestBin);
-        const float coarseHz = static_cast<float>(fsDec_) / coarse;
-        const float classicalHz = classical.valid ? tracker_.lagToHz(classical.lag) : 0.0f;
-        const float correctP = 0.65f - 0.25f * std::clamp(params_.response, 0.0f, 1.0f); // accurate .65 ... fast .40
-
-        // Hybrid. On real recordings the picker clearly beats the classical tracker above ~160 Hz (it fixes
-        // octave and harmonic slips) but not in the bass, where the classical tracker's "first strong peak" rule is
-        // the more reliable, so the bass range stays entirely classical. And the picker corrects and vetoes: it
-        // starts a pitch the classical tracker missed only when very sure (left alone it also "hears" reverb tails
-        // and consonant gaps as pitch, which makes extra notes).
-        const bool netPitch = coarseHz >= kHybridNetMinHz && (!classical.valid || classicalHz >= kHybridClassicalMinHz);
-        const auto netPeak = [&]() {
-            PitchCandidate n = tracker_.refineNear(coarse);
-            if (!n.valid) // no clean peak next to the network's choice: trust the network's lag
-            {
-                n.valid = true;
-                n.lag = coarse;
-                n.clarity = pVoiced;
-            }
-            return n;
-        };
-
-        if (params_.neuralPure)
-        {
-            if (levelDb >= effGate && pVoiced > correctP)
-                c = netPeak();
-        }
-        else if (classical.valid)
-        {
-            const bool vetoed = netPitch && pVoiced < kNetVetoP;
-            const bool agrees = std::abs(std::log2(classicalHz / coarseHz)) < 0.08f;
-            if (vetoed)
-                c = PitchCandidate {};
-            else if (netPitch && pVoiced > correctP && !agrees)
-                c = netPeak();
-            else
-                c = classical;
-        }
-        else if (netPitch && levelDb >= effGate && pVoiced > kNetCreateMinP)
-            c = netPeak();
-    }
-    else
-        c = classical;
+    if (levelDb >= effGate)
+        c = tracker_.analyze();
 
     if (c.valid)
     {
@@ -279,7 +182,7 @@ void Engine::runHop(int sampleOffset, EventList& out)
     lastFrame_ = f;
     notes_.update(f, effGate, peakDb_, onset, sampleOffset, out);
     if (sink_ != nullptr)
-        sink_->onFrame(f, notes_.currentNote(), hopIndex_, sink_->wantsFeatures() ? features_ : nullptr);
+        sink_->onFrame(f, notes_.currentNote(), hopIndex_);
     ++hopIndex_;
 }
 

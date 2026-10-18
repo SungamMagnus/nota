@@ -11,13 +11,10 @@ The container is the unfrozen .amxd layout: 'ampf' header, device type, 'ptch' +
 """
 import json
 import struct
-import sys
 from pathlib import Path
 
 HERE = Path(__file__).parent
-# --share: the variant for sharing. No AI Assist control, because the shared external is built without the trained weights.
-SHARE = "--share" in sys.argv
-OUT = HERE / ("devices-share" if SHARE else "devices")
+OUT = HERE / "devices"
 
 CORAL = [0.929, 0.506, 0.349, 1.0]
 TEAL = [0.322, 0.690, 0.643, 1.0]
@@ -331,7 +328,7 @@ def build_source():
         idx += 1
 
     idx += 3
-    # right of the Range tab, two rows of three: the MPE group on top, then bend / through / AI
+    # right of the Range tab, two rows of three: the MPE group on top, then bend / through
     cells = [(X0 + 66 + 76 * (k % 3), ry[2] + 2 + 26 * (k // 3)) for k in range(6)]
     sw = [("mpe", "MPE", "MPE", "MPE", 0, TEAL,
            "On: MPE output. Every note gets its own MIDI channel with its own pitch bend, pressure and slide, for an MPE instrument. "
@@ -345,9 +342,6 @@ def build_source():
            "every note is always bent on its own, so this has no effect."),
           ("thru", "Audio Through", "Thru", "THRU", 1, STEEL,
            "On: the incoming audio is passed on unchanged. Off: the device outputs silence (it only makes notes).")]
-    if not SHARE:
-        sw.append(("neural", "AI Assist", "AI", "AI ASSIST", 0, CORAL,
-                   "Experimental neural pitch picker: fixes octave slips on higher voices and leaves the bass range alone."))
     for (attr, long, short, text, init, color, ann), (x, y) in zip(sw, cells):
         tog(attr, long, short, text, init, x, y, color, ann)
     va = p.toggle("Velocity Auto", "Vel Auto", "VEL AUTO", 1, P(idx), (X0 + 6 * CW, ry[1] + 4, 66, 20), TEAL,

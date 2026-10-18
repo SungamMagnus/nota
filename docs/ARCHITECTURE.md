@@ -1,7 +1,7 @@
 # Nota — architecture and roadmap
 
 Monophonic audio → MIDI, built for a bass guitar or a voice with no mode switch,
-as little latency as the physics allows, and a path to a neural front-end.
+as little latency as the physics allows.
 
 ## The latency floor (read this first)
 
@@ -59,7 +59,7 @@ Measured on synthetic material (`build/nota_bench`, 48 kHz, Response 0.5):
 | CPU                            |               | ~0.6 % of one core |  |
 
 Bass latency is ~2.5–3 periods: already close to the floor above. The headroom
-is in the *low* range, which is what Phase 2 attacks.
+is in the *low* range.
 
 ### Known weak spots of Phase 1 (honest list)
 
@@ -72,32 +72,16 @@ is in the *low* range, which is what Phase 2 attacks.
 * Pitch bend currently follows deviation up to the bend range, with no
   glide-vs-jump classifier (a hammer-on is a new note, a slide is a bend).
 
-## Phase 2 — neural picker (built, optional "AI Assist")
+## Phase 2 — neural picker (tried, then removed)
 
-A small recurrent network (GRU, 186k weights, ~170k multiply-adds per 2.7 ms hop, ~6% of one core) reads the multi-scale
-NSDF the plug-in already computes (four windows on a log-lag grid), the classical tracker's own answer, and the level.
-It outputs a distribution over 96 log-lag bins plus "unvoiced". The exact pitch still comes from the NSDF peak next to
-the chosen bin; the network picks *which* peak (fixing octave and harmonic slips) and whether anything is voiced.
-`training/` holds the whole pipeline; the C++ forward pass is checked against PyTorch to 2e-3 in the tests.
-
-**Hybrid rule (what ships behind the switch).** Measured on 34 minutes of real bass and voice against an offline pYIN
-reference, the network is clearly better above ~160 Hz and not better in the bass. So the bass range stays classical,
-and the network corrects and vetoes: it may start a pitch the classical tracker missed only when 97% sure.
-
-| real recordings, note held vs reference note | classical | AI Assist |
-|---|---|---|
-| voice: right-note frames | 0.770 | **0.801** |
-| voice: octave slips | 3.2% | **0.4%** |
-| voice: notes shorter than 80 ms (blips) | 585 | **515** |
-| bass: right-note frames | 0.807 | 0.806 (unchanged by design) |
-| held-out bass file / held-out voice file | 0.77 / 0.82 | 0.77 / 0.81 (no regression, no gain) |
-| synthetic hard suite: notes found / false notes | 115 / 2 | 115 / 5 |
-| CPU | 0.5% of a core | ~6% |
-
-**Honest limits.** The reference is pYIN, not a human transcription. The large voice gain is on two high-register
-takes whose validation chunks come from the same sessions as training; on a second, unseen singer the two modes were
-level. Latency is unchanged: the network sees the same windows, so it cannot beat the two-period physical limit.
-Next: more bass material (the bass range is where the network is weakest), then evaluate on other singers and rooms.
+A small recurrent network (a GRU, 186k weights, ~6% of a core) was trained on the multi-scale NSDF to choose which peak is
+the fundamental, and shipped for a while as an optional "AI Assist" switch. Against an offline pYIN reference on 34 minutes of
+real bass and voice it fixed octave slips on high voices (3.2% to 0.4%) but did nothing for the bass range, and it cost
+a tenth of the CPU budget. Its weights also derived partly from commercial sample loops, so they could never be published.
+It was removed to keep the project small and fully reproducible; the classical tracker above is all there is. The code
+and the training pipeline are in the git history (commits `3186304` and `24205bf`) if it is ever worth revisiting, with
+the honest conclusion that the gain was on high-register voice only, measured against a pYIN reference rather than a
+human transcription.
 
 ## Phase 3 — musical polish
 

@@ -14,7 +14,7 @@ numbers for several pairs (for example one for bass and one for voice). Differen
 
 All of Nota's settings are Live parameters on **Nóta source** (so they can be automated and mapped): gate (the line in the display),
 response, release, retrigger, velocity (min / max / full level / range / auto), transpose, channel, range (auto/bass/voice),
-pitch bend, MPE (on/off, bend range, pressure, slide) and AI Assist.
+pitch bend and MPE (on/off, bend range, pressure, slide).
 
 ### Transpose, MPE, Pitch Bend, Pressure, Slide
 
@@ -131,11 +131,8 @@ embedded in the `.amxd` files, like Max's *Freeze Device*, done by `freeze.py`) 
 installs nothing else: drag both into Live. Checked in Max with the package folders removed: the unfrozen device finds
 no `nota~`, the frozen one plays from its own contents, and Max unpacks the external and scripts from the shipped files.
 
-The share build is made **without the trained neural weights** (`-DNOTA_NEURAL=OFF`, a stub instead of
-`PickerWeights.cpp`, 336 KB instead of 1.7 MB), so nothing derived from the training recordings is distributed, and the
-share variant of the source device (`make_devices.py --share`) has no AI Assist control. Mac only (universal, ad-hoc
-signed, not notarized): Windows would need a separate build of the external, and macOS may ask the user to allow the
-devices once (the README in the zip says how).
+Mac only (universal, ad-hoc signed, not notarized): Windows would need a separate build of the external, and macOS may ask the
+user to allow the devices once (the README in the zip says how).
 
 ## Install (done by the build; Max 8.2+ and Max 9)
 
@@ -162,5 +159,4 @@ engine inside Max. All three quit Max when done. The chord logic also has a fast
   devices by Max `send`/`receive`. That adds roughly one audio buffer (about 3-12 ms) on top of the engine's delay.
 * The devices are unfrozen: they need the `nota` package on this machine. To share them, freeze them in Max
   (which embeds the external).
-* `nota~` embeds the trained AI Assist weights (trained partly on licensed sample loops), so the external is kept out
-  of git.
+* The built `nota~.mxo` is a build output and is not kept in git; `make_share.py` builds it and embeds it in the frozen devices.

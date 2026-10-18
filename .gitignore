@@ -14,9 +14,6 @@ maxforlive/build/
 maxforlive/externals/
 maxforlive/package/nota/externals/
 maxforlive/dist/
-maxforlive/devices-share/
-# generated from the training recordings (partly commercial loops): never commit
-source/dsp/PickerWeights.cpp
-tests/picker_reference.h
 # local Max test patches (they write to machine-specific paths)
 maxforlive/tests/*.maxpat
+training/

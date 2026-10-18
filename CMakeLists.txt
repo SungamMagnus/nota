@@ -48,9 +48,6 @@ add_executable(nota_eval tools/nota_eval.cpp)
 target_link_libraries(nota_eval PRIVATE nota_dsp nota_warnings)
 target_include_directories(nota_eval PRIVATE tools)
 
-add_executable(nota_features tools/nota_features.cpp)
-target_link_libraries(nota_features PRIVATE nota_dsp nota_warnings)
-target_include_directories(nota_features PRIVATE tools)
 
 add_executable(nota_cli tools/nota_cli.cpp)
 target_link_libraries(nota_cli PRIVATE nota_dsp nota_warnings)

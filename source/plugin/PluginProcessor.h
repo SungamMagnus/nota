@@ -87,7 +87,6 @@ private:
     std::atomic<float>* pRetrigger_ = nullptr;
     std::atomic<float>* pChannel_ = nullptr;
     std::atomic<float>* pMode_ = nullptr;
-    std::atomic<float>* pNeural_ = nullptr;
     std::atomic<float>* pMpeBend_ = nullptr;
     std::atomic<float>* pMpePressure_ = nullptr;
     std::atomic<float>* pMpeSlide_ = nullptr;

@@ -26,8 +26,6 @@ struct Params
     float mpeBendRange = 48.0f;   // semitones; must match the receiving synth's per-note bend range
     bool mpePressure = true;      // channel pressure from the note's level
     bool mpeSlide = true;         // CC74 from the note's brightness
-    bool neural = false;          // hybrid: the trained picker decides voicing, and the pitch peak where it is reliable
-    bool neuralPure = false;      // evaluation only: the picker alone, no classical fallback
     float holdMs = 110.0f;        // how long unvoiced frames (consonants) are bridged before note-off
 };
 

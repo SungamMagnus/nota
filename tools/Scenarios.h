@@ -2,7 +2,7 @@
 
 // Harder, phrase-level synthetic material with note-level ground truth: legato, hammer-ons,
 // slides, distortion, hum/noise, reverb, portamento, consonant gaps, wide vibrato, falsetto.
-// Deterministic. Used by nota_eval to score the tracker (and later the neural path).
+// Deterministic. Used by nota_eval to score the tracker.
 
 #include "TestSignals.h"
 

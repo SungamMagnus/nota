@@ -1,6 +1,6 @@
 // Sweeps single notes across the bass and voice ranges and reports the note-on
 // latency, wrong/extra notes and CPU cost. This is the yardstick for every change
-// to the tracker (and, later, for comparing it with the neural path).
+// to the tracker.
 
 #include "TestSignals.h"
 

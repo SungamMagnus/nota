@@ -1,6 +1,6 @@
 // Offline audio -> MIDI: the same Engine the plugin runs, fed from a WAV file.
 //   nota_cli in.wav out.mid [--range auto|bass|voice] [--gate dB] [--response 0..1] [--bend] [--bend-range st]
-//                           [--mpe] [--mpe-range st] [--frames frames.csv] [--neural]   (MPE: one channel per note, per-note bend/pressure/slide)
+//                           [--mpe] [--mpe-range st] [--frames frames.csv]   (MPE: one channel per note, per-note bend/pressure/slide)
 
 #include "Engine.h"
 #include "smf_writer.h"
@@ -46,10 +46,6 @@ int main(int argc, char** argv)
             p.pitchBend = true;
         else if (!std::strcmp(argv[i], "--mpe"))
             p.mpe = true;
-        else if (!std::strcmp(argv[i], "--neural"))
-            p.neural = true;
-        else if (!std::strcmp(argv[i], "--neural-pure"))
-            p.neural = p.neuralPure = true;
         else if (!std::strcmp(argv[i], "--frames") && more)
             framesPath = argv[++i];
     }
@@ -70,7 +66,7 @@ int main(int argc, char** argv)
     {
         FILE* f = nullptr;
         double secondsPerHop = 0.0;
-        void onFrame(const nota::PitchFrame& fr, int note, long long hop, const float*) override
+        void onFrame(const nota::PitchFrame& fr, int note, long long hop) override
         {
             std::fprintf(f, "%.5f,%.3f,%.4f,%.2f,%d\n", static_cast<double>(hop + 1) * secondsPerHop, fr.voiced ? fr.freqHz : 0.0, fr.clarity,
                          fr.levelDb, note);

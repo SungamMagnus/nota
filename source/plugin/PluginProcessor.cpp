@@ -17,7 +17,6 @@ constexpr const char* kTuning = "tuning";
 constexpr const char* kRetrigger = "retrigger";
 constexpr const char* kChannel = "channel";
 constexpr const char* kMode = "mode";
-constexpr const char* kNeural = "neural";
 constexpr const char* kMpeBend = "mpeBend";
 constexpr const char* kMpePressure = "mpePressure";
 constexpr const char* kMpeSlide = "mpeSlide";
@@ -50,7 +49,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout NotaProcessor::createLayout(
                                                 AudioParameterFloatAttributes().withLabel("Hz")));
     l.add(std::make_unique<AudioParameterInt>(pid(kChannel), "MIDI Channel", 1, 16, 1));
     l.add(std::make_unique<AudioParameterChoice>(pid(kMode), "Output Mode", StringArray { "Standard", "MPE" }, 0));
-    l.add(std::make_unique<AudioParameterBool>(pid(kNeural), "AI Assist", false));
     l.add(std::make_unique<AudioParameterFloat>(pid(kMpeBend), "MPE Bend Range", NormalisableRange<float>(1.0f, 48.0f, 1.0f), 48.0f,
                                                 AudioParameterFloatAttributes().withLabel("st")));
     l.add(std::make_unique<AudioParameterBool>(pid(kMpePressure), "MPE Pressure", true));
@@ -76,7 +74,6 @@ NotaProcessor::NotaProcessor()
     pRetrigger_ = apvts.getRawParameterValue(kRetrigger);
     pChannel_ = apvts.getRawParameterValue(kChannel);
     pMode_ = apvts.getRawParameterValue(kMode);
-    pNeural_ = apvts.getRawParameterValue(kNeural);
     pMpeBend_ = apvts.getRawParameterValue(kMpeBend);
     pMpePressure_ = apvts.getRawParameterValue(kMpePressure);
     pMpeSlide_ = apvts.getRawParameterValue(kMpeSlide);
@@ -117,7 +114,6 @@ nota::Params NotaProcessor::readParams() const
     p.tuningHz = pTuning_->load();
     p.retriggerDb = pRetrigger_->load();
     p.mpe = pMode_->load() > 0.5f;
-    p.neural = pNeural_->load() > 0.5f;
     p.mpeBendRange = pMpeBend_->load();
     p.mpePressure = pMpePressure_->load() > 0.5f;
     p.mpeSlide = pMpeSlide_->load() > 0.5f;

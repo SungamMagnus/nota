@@ -2,7 +2,6 @@
 
 #include "Biquad.h"
 #include "NoteTracker.h"
-#include "PickerNet.h"
 #include "Params.h"
 #include "PitchTracker.h"
 #include "Types.h"
@@ -15,9 +14,7 @@ struct FrameSink
 {
     virtual ~FrameSink() = default;
     // hopIndex counts hops since reset(); the hop completed at (hopIndex + 1) * kHopSamples analysis samples.
-    // features is null unless wantsFeatures(); otherwise Engine::kFeatureDim floats (layout in Engine::kFeatureDim).
-    virtual void onFrame(const PitchFrame& frame, int note, long long hopIndex, const float* features) = 0;
-    virtual bool wantsFeatures() const { return false; }
+    virtual void onFrame(const PitchFrame& frame, int note, long long hopIndex) = 0;
 };
 
 // Audio in -> MIDI events. Plain C++, no JUCE, no allocation after prepare().
@@ -25,10 +22,6 @@ class Engine
 {
 public:
     static constexpr int kHopSamples = 32; // analysis samples (12 kHz) per hop, ~2.7 ms
-    // Network input: NSDF of four windows on the log-lag grid, then the classical tracker's own answer (a bump on the
-    // log-lag grid + its clarity) so the network only has to learn when to *override* it, then the level.
-    static constexpr int kPriorBins = PitchTracker::kFeatureBins;
-    static constexpr int kFeatureDim = PitchTracker::kFeatureScales * PitchTracker::kFeatureBins + kPriorBins + 1 + 1;
 
     void prepare(double sampleRate);
     void reset();
@@ -60,8 +53,6 @@ private:
 
     Biquad lp1_, lp2_, hp_;
     PitchTracker tracker_;
-    PickerNet net_;
-    float netLogits_[PickerNet::kOut] {};
     NoteTracker notes_;
 
     // Exact 12 kHz resampling: Catmull-Rom between the last four low-passed input samples.
@@ -76,7 +67,6 @@ private:
     float effGateDb_ = -55.0f;
 
     FrameSink* sink_ = nullptr;
-    float features_[kFeatureDim] {};
     long long hopIndex_ = 0;
     int hopsSinceOnset_ = 1000;
     float peakDb_ = -120.0f;

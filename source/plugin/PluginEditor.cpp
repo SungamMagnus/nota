@@ -28,8 +28,6 @@ NotaEditor::NotaEditor(NotaProcessor& p) : juce::AudioProcessorEditor(&p), proc_
     release_ = std::make_unique<Knob>(param("release"), "Release", kCoral, kCoral, 20.0f, false,
                                       [](float v) { return juce::String(juce::roundToInt(v)) + " dB"; });
     range_ = std::make_unique<Selector>(static_cast<juce::AudioParameterChoice&>(param("range")), kCoral);
-    ai_ = std::make_unique<Latch>(param("neural"), "AI ASSIST", kCoral, 192.0f);
-    addAndMakeVisible(*ai_);
 
     // NOTE — what a note does (teal).
     retrigger_ = std::make_unique<Knob>(param("retrigger"), "Retrigger", kTeal, kTeal, 20.0f, false,
@@ -123,7 +121,6 @@ void NotaEditor::resized()
     place(*response_, 128.0f, kRowA - 6.0f);
     place(*release_, 204.0f, kRowA);
     placeAt(*range_, 36.0f, kRowBCentre - 9.0f);
-    placeAt(*ai_, 36.0f, kRowBCentre + 21.0f);
 
     place(*retrigger_, 300.0f, kRowA);
     place(*bendRange_, 420.0f, kRowA);

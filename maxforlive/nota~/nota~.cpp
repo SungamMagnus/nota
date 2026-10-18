@@ -5,7 +5,7 @@
 //            2: list status data1 [data2]                  raw MIDI bytes: note on/off, pitch bend, CC, channel pressure
 //            3: list note freq level_db clarity velocity gate_db peak_db   display info, ~25 per second
 //
-// Everything Nota does in the plug-in is here: pitch tracking (classical + optional neural picker), note logic,
+// Everything Nota does in the plug-in is here: pitch tracking, note logic,
 // velocity range, pitch bend, MPE (one channel per note with per-note bend / pressure / slide), transpose, tuning.
 // All settings are attributes, so [nota~ @gate -50] and the message "gate -50" both work.
 //
@@ -79,7 +79,7 @@ typedef struct _nota
 
     // Attributes (plain members; read by the audio thread each block - aligned 32-bit reads are atomic in practice).
     float a_gate, a_release, a_response, a_bendrange, a_tuning, a_retrigger, a_velfull, a_velrange, a_mpebend;
-    long a_range, a_bend, a_transpose, a_channel, a_velmin, a_velmax, a_velauto, a_mpe, a_mpepressure, a_mpeslide, a_neural, a_thru;
+    long a_range, a_bend, a_transpose, a_channel, a_velmin, a_velmax, a_velauto, a_mpe, a_mpepressure, a_mpeslide, a_thru;
 
     // Audio-thread state
     bool mpeActive;
@@ -140,7 +140,6 @@ extern "C" void ext_main(void*)
     NOTA_FLOAT("mpebend", a_mpebend, 1, 48, 48);
     NOTA_LONG("mpepressure", a_mpepressure, 0, 1, 1);
     NOTA_LONG("mpeslide", a_mpeslide, 0, 1, 1);
-    NOTA_LONG("neural", a_neural, 0, 1, 0);            // AI Assist: neural pitch picker (voice range)
     NOTA_LONG("thru", a_thru, 0, 1, 1);                // pass the input audio through to the outputs
     // clang-format on
 
@@ -190,7 +189,6 @@ void* nota_new(t_symbol*, long argc, t_atom* argv)
     x->a_mpebend = 48;
     x->a_mpepressure = 1;
     x->a_mpeslide = 1;
-    x->a_neural = 0;
     x->a_thru = 1;
 
     x->mpeActive = false;
@@ -280,7 +278,6 @@ static nota::Params readParams(const t_nota* x)
     p.mpeBendRange = x->a_mpebend;
     p.mpePressure = x->a_mpepressure != 0;
     p.mpeSlide = x->a_mpeslide != 0;
-    p.neural = x->a_neural != 0;
     return p;
 }
 

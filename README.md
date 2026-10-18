@@ -5,7 +5,7 @@ Real-time **monophonic audio → MIDI** for bass guitar and voice. One tracker c
 [JUCE](https://juce.com). The DSP core is plain C++17 with no JUCE dependency.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it works, the latency
-limits, and the neural-network roadmap.
+and the latency limits.
 
 ## Building
 
@@ -77,8 +77,4 @@ Controls: *Gate* (level below which nothing happens), *Response* (accurate ↔
 fast), *Release* (note-off, in dB under the note's own peak), *Velocity range* (the output
 velocity range, min–max; equal handles = fixed velocity), *Full level* (the attack level that reaches the max), *Retrigger* (re-pluck of the same note), *Range*
 (Auto / Bass / Voice), *Pitch Bend* + *Bend Range* (must match the receiving
-synth), *Transpose*, *Tuning*, *MIDI Channel* (Standard mode), *Output mode* (Standard / MPE), *AI Assist* (experimental neural pitch picker; fixes octave slips on higher voices, leaves the bass range alone; ~6% of a core).
-
-**AI Assist needs trained weights that are not in this repository** (they derive partly from commercial sample loops, see
-[training/README.md](training/README.md)). A build from a plain checkout has the classical tracker only and the AI Assist
-switch does nothing; train your own weights with `training/` to enable it.
+synth), *Transpose*, *Tuning*, *MIDI Channel* (Standard mode), *Output mode* (Standard / MPE).

@@ -39,7 +39,7 @@ private:
 
     std::unique_ptr<sungam::Knob> gate_, response_, release_, retrigger_, bendRange_, transpose_, tuning_, channel_, velFull_, mpeBend_;
     std::unique_ptr<sungam::Latch> bend_;
-    std::unique_ptr<sungam::Latch> pressure_, slide_, ai_;
+    std::unique_ptr<sungam::Latch> pressure_, slide_;
     std::unique_ptr<sungam::Selector> mode_;
     std::unique_ptr<sungam::RangeBar> velRange_;
     std::unique_ptr<juce::ParameterAttachment> modeWatcher_;

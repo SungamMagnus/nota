@@ -29,13 +29,6 @@ class PitchTracker
 public:
     static constexpr int kNumScales = 9;
 
-    // Neural-picker input: NSDF of four windows on a log-lag grid (8 .. 554 samples at 12 kHz = 1.5 kHz .. 21.7 Hz).
-    static constexpr int kFeatureScales = 4;
-    static constexpr int kFeatureBins = 96;
-    static constexpr float kFeatureMinLag = 8.0f;
-    static constexpr float kFeatureMaxLag = 554.0f;
-    static constexpr std::array<int, kFeatureScales> kFeatureScaleIndex { 2, 4, 6, 8 }; // windows 192, 360, 664, 1232
-
     void prepare(double decimatedRate, float minHz, float maxHz);
     void reset();
 
@@ -51,13 +44,6 @@ public:
     }
 
     PitchCandidate analyze();
-
-    // Fills out[kFeatureScales * kFeatureBins]; ~four FFT pairs, so call it only when there is a signal.
-    void features(float* out);
-    static float featureLag(int bin);
-
-    // The NSDF peak within +-7% of a lag chosen elsewhere (the neural picker): exact lag and clarity, or invalid.
-    PitchCandidate refineNear(float lag);
 
     // Sum of squares of `len` samples ending `back` samples before the newest one.
     double energy(int back, int len) const
