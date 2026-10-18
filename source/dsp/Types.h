@@ -11,17 +11,19 @@ struct PitchFrame
     float freqHz = 0.0f;   // fundamental estimate, 0 when unvoiced
     float clarity = 0.0f;  // 0..1 periodicity confidence
     float levelDb = -120.0f;
+    float brightness = 0.0f; // 0..1, harmonic richness relative to a sine (drives MPE slide)
     bool voiced = false;
 };
 
 struct MidiEvent
 {
-    enum class Type : uint8_t { NoteOn, NoteOff, PitchBend, Cc };
+    enum class Type : uint8_t { NoteOn, NoteOff, PitchBend, Cc, ChannelPressure };
 
     Type type = Type::NoteOn;
     uint8_t data1 = 0;     // note number / cc number
     uint8_t data2 = 0;     // velocity / cc value
     uint16_t bend = 8192;  // 14-bit, PitchBend only
+    uint8_t channel = 0;   // 1..16 when the engine chose it (MPE); 0 = the plug-in's output channel
     int sampleOffset = 0;  // relative to the start of the block given to Engine::process
 };
 

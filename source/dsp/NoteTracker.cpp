@@ -6,6 +6,8 @@
 namespace nota
 {
 
+namespace { constexpr float kAutoFallDbPerSec = 0.5f; } // velocityAuto: how fast the reference level forgets
+
 namespace
 {
 float median3(float a, float b, float c)
@@ -27,6 +29,7 @@ void NoteTracker::reset()
     sinceNoteOffMs_ = 1e6f;
     notePeakDb_ = -120.0f;
     belowMs_ = unvoicedMs_ = retrigMs_ = noteAgeMs_ = 0.0f;
+    sinceOnsetMs_ = 1e6f;
     histCount_ = histPos_ = runCount_ = slopeRun_ = 0;
     havePrevMed_ = false;
     medRingPos_ = medRingCount_ = abruptHold_ = aboveRun_ = aboveSign_ = 0;
@@ -34,7 +37,13 @@ void NoteTracker::reset()
     needOnset_ = false;
     lastBend_ = 8192;
     lastVelocity_ = 0;
+    velRefDb_ = -200.0f;
     bendSmoothed_ = 0.0f;
+    noteChannel_ = 0;
+    nextMember_ = kFirstMember;
+    lastBrightness_ = pressureSmoothed_ = slideSmoothed_ = 0.0f;
+    lastPressure_ = lastSlide_ = -1;
+    hopsSincePressure_ = hopsSinceSlide_ = hopsSinceBend_ = 0;
 }
 
 void NoteTracker::configure(const Params& p, int stabilityHops)
@@ -68,32 +77,97 @@ float NoteTracker::pitchRange() const
     return hi - lo;
 }
 
+void NoteTracker::emit(MidiEvent e, EventList& out) const
+{
+    if (p_.mpe)
+        e.channel = static_cast<uint8_t>(noteChannel_);
+    out.push(e);
+}
+
 void NoteTracker::sendBend(float midi, bool force, int sampleOffset, EventList& out)
 {
-    const float range = std::max(p_.bendRange, 0.5f);
+    const float range = std::max(p_.mpe ? p_.mpeBendRange : p_.bendRange, 0.5f);
     const float target = note_ >= 0 ? std::clamp((midi - static_cast<float>(note_)) / range, -1.0f, 1.0f) : 0.0f;
-    bendSmoothed_ = force ? target : bendSmoothed_ + 0.5f * (target - bendSmoothed_);
+    bendSmoothed_ = force ? target : bendSmoothed_ + (p_.mpe ? 0.4f : 0.5f) * (target - bendSmoothed_);
 
     const int value = std::clamp(8192 + static_cast<int>(std::lround(bendSmoothed_ * 8191.0f)), 0, 16383);
-    if (force || std::abs(value - lastBend_) >= 24)
+    ++hopsSinceBend_;
+    // Send once it has moved 2 cents, and no faster than every other hop (~190 messages/s).
+    const float movedSemitones = std::abs(static_cast<float>(value - lastBend_)) / 8191.0f * range;
+    if (force || (movedSemitones >= 0.02f && hopsSinceBend_ >= 2))
     {
         MidiEvent e;
         e.type = MidiEvent::Type::PitchBend;
         e.bend = static_cast<uint16_t>(value);
         e.sampleOffset = sampleOffset;
-        out.push(e);
+        emit(e, out);
         lastBend_ = value;
+        hopsSinceBend_ = 0;
     }
 }
 
-// Linear in dB between the gate (velocityMin) and velocityFullDb (velocityMax): equal level steps
-// give equal velocity steps, which is how a dynamic range feels.
-int NoteTracker::velocityFor(float attackDb) const
+float NoteTracker::fullDb() const
 {
+    return p_.velocityAuto ? std::max(p_.velocityFullDb, velRefDb_) : p_.velocityFullDb;
+}
+
+float NoteTracker::pressureTarget(float levelDb) const
+{
+    const float span = std::max(6.0f, p_.velocityRangeDb);
+    return std::clamp((levelDb - (fullDb() - span)) / span, 0.0f, 1.0f) * 127.0f;
+}
+
+// Continuous per-note expression: channel pressure follows the level, CC74 ("slide") the brightness.
+void NoteTracker::sendExpression(const PitchFrame& f, int sampleOffset, EventList& out)
+{
+    ++hopsSincePressure_;
+    ++hopsSinceSlide_;
+
+    if (p_.mpePressure)
+    {
+        pressureSmoothed_ += 0.4f * (pressureTarget(f.levelDb) - pressureSmoothed_);
+        const int v = std::clamp(static_cast<int>(std::lround(pressureSmoothed_)), 0, 127);
+        if (std::abs(v - lastPressure_) >= 2 && hopsSincePressure_ >= 2)
+        {
+            MidiEvent e;
+            e.type = MidiEvent::Type::ChannelPressure;
+            e.data1 = static_cast<uint8_t>(v);
+            e.sampleOffset = sampleOffset;
+            emit(e, out);
+            lastPressure_ = v;
+            hopsSincePressure_ = 0;
+        }
+    }
+
+    if (p_.mpeSlide && f.voiced)
+    {
+        slideSmoothed_ += 0.15f * (f.brightness * 127.0f - slideSmoothed_);
+        const int v = std::clamp(static_cast<int>(std::lround(slideSmoothed_)), 0, 127);
+        if (std::abs(v - lastSlide_) >= 2 && hopsSinceSlide_ >= 2)
+        {
+            MidiEvent e;
+            e.type = MidiEvent::Type::Cc;
+            e.data1 = 74;
+            e.data2 = static_cast<uint8_t>(v);
+            e.sampleOffset = sampleOffset;
+            emit(e, out);
+            lastSlide_ = v;
+            hopsSinceSlide_ = 0;
+        }
+    }
+}
+
+// Linear in dB over the velocityRangeDb under the full level (velocityMin at the bottom, velocityMax at the top): equal
+// level steps give equal velocity steps, which is how a dynamic range feels. With velocityAuto the full level is the
+// loudest recent attack, so the loudest playing is always the top of the range.
+int NoteTracker::velocityFor(float attackDb)
+{
+    if (p_.velocityAuto && attackDb > velRefDb_)
+        velRefDb_ = attackDb;
     const int lo = std::clamp(std::min(p_.velocityMin, p_.velocityMax), 1, 127);
     const int hi = std::clamp(std::max(p_.velocityMin, p_.velocityMax), 1, 127);
-    const float span = std::max(6.0f, p_.velocityFullDb - p_.gateDb);
-    const float t = std::clamp((attackDb - p_.gateDb) / span, 0.0f, 1.0f);
+    const float span = std::max(6.0f, p_.velocityRangeDb);
+    const float t = std::clamp((attackDb - (fullDb() - span)) / span, 0.0f, 1.0f);
     return std::clamp(static_cast<int>(std::lround(static_cast<float>(lo) + static_cast<float>(hi - lo) * t)), 1, 127);
 }
 
@@ -107,8 +181,40 @@ void NoteTracker::startNote(int note, float midi, float attackDb, float levelDb,
     rangeCount_ = rangePos_ = 0;
     pushRange(midi);
 
+    if (p_.mpe)
+    {
+        noteChannel_ = nextMember_;
+        nextMember_ = nextMember_ >= kLastMember ? kFirstMember : nextMember_ + 1;
+
+        // Expression first, so the note speaks with it from its first sample.
+        if (p_.mpeSlide)
+        {
+            slideSmoothed_ = lastBrightness_ * 127.0f;
+            lastSlide_ = std::clamp(static_cast<int>(std::lround(slideSmoothed_)), 0, 127);
+            MidiEvent c;
+            c.type = MidiEvent::Type::Cc;
+            c.data1 = 74;
+            c.data2 = static_cast<uint8_t>(lastSlide_);
+            c.sampleOffset = sampleOffset;
+            emit(c, out);
+        }
+        if (p_.mpePressure)
+        {
+            pressureSmoothed_ = pressureTarget(levelDb);
+            lastPressure_ = std::clamp(static_cast<int>(std::lround(pressureSmoothed_)), 0, 127);
+            MidiEvent c;
+            c.type = MidiEvent::Type::ChannelPressure;
+            c.data1 = static_cast<uint8_t>(lastPressure_);
+            c.sampleOffset = sampleOffset;
+            emit(c, out);
+        }
+        hopsSincePressure_ = hopsSinceSlide_ = hopsSinceBend_ = 0;
+    }
+    else
+        noteChannel_ = 0;
+
     // Pitch bend goes out first so the note speaks at the right pitch from its first sample.
-    if (p_.pitchBend)
+    if (p_.pitchBend || p_.mpe)
         sendBend(midi, true, sampleOffset, out);
     else if (lastBend_ != 8192)
     {
@@ -117,7 +223,7 @@ void NoteTracker::startNote(int note, float midi, float attackDb, float levelDb,
         b.type = MidiEvent::Type::PitchBend;
         b.bend = 8192;
         b.sampleOffset = sampleOffset;
-        out.push(b);
+        emit(b, out);
         lastBend_ = 8192;
     }
 
@@ -128,7 +234,7 @@ void NoteTracker::startNote(int note, float midi, float attackDb, float levelDb,
     e.data1 = static_cast<uint8_t>(outNote(note));
     e.data2 = static_cast<uint8_t>(lastVelocity_);
     e.sampleOffset = sampleOffset;
-    out.push(e);
+    emit(e, out);
 }
 
 void NoteTracker::stopNote(int sampleOffset, EventList& out)
@@ -141,7 +247,7 @@ void NoteTracker::stopNote(int sampleOffset, EventList& out)
     e.data1 = static_cast<uint8_t>(outNote(note_));
     e.data2 = 0;
     e.sampleOffset = sampleOffset;
-    out.push(e);
+    emit(e, out);
 
     lastNote_ = note_;
     note_ = -1;
@@ -153,6 +259,9 @@ void NoteTracker::update(const PitchFrame& f, float effGateDb, float peakDb, boo
 {
     sinceNoteOffMs_ += hopMs_;
     noteAgeMs_ += hopMs_;
+    sinceOnsetMs_ = onset ? 0.0f : sinceOnsetMs_ + hopMs_;
+    if (p_.velocityAuto && velRefDb_ > p_.velocityFullDb)
+        velRefDb_ = std::max(p_.velocityFullDb, velRefDb_ - kAutoFallDbPerSec * hopMs_ * 0.001f);
 
     float med = 0.0f;
     if (f.voiced)
@@ -167,6 +276,7 @@ void NoteTracker::update(const PitchFrame& f, float effGateDb, float peakDb, boo
         histPos_ = (histPos_ + 1) % 3;
         histCount_ = std::min(histCount_ + 1, 3);
         lastMidi_ = m;
+        lastBrightness_ = f.brightness;
         unvoicedMs_ = 0.0f;
 
         med = histCount_ >= 3 ? median3(hist_[0], hist_[1], hist_[2]) : m;
@@ -184,7 +294,7 @@ void NoteTracker::update(const PitchFrame& f, float effGateDb, float peakDb, boo
         // crest arrives smoothly.
         if (medRingCount_ == 0 && note_ >= 0 && std::abs(med - static_cast<float>(note_)) > 0.65f)
             abruptHold_ = 20;
-        else if (medRingCount_ >= 4 && std::abs(med - medRing_[medRingPos_]) >= 0.4f)
+        else if (medRingCount_ >= 4 && std::abs(med - medRing_[medRingPos_]) >= (p_.mpe ? 0.9f : 0.4f))
             abruptHold_ = 20;
         else if (abruptHold_ > 0)
             --abruptHold_;
@@ -255,15 +365,21 @@ void NoteTracker::update(const PitchFrame& f, float effGateDb, float peakDb, boo
         return;
     }
 
+    if (p_.mpe)
+        sendExpression(f, sampleOffset, out);
+
     if (!f.voiced)
         return;
 
     const float dev = med - static_cast<float>(note_);
     // Vibrato swings the pitch around the note: the wider the recent range, the further the pitch
     // has to travel before it counts as another note.
-    const float baseThr = p_.pitchBend ? std::max(0.65f, 0.9f * p_.bendRange) : 0.65f;
+    const float baseThr = (p_.pitchBend && !p_.mpe) ? std::max(0.65f, 0.9f * p_.bendRange) : 0.65f;
     const float switchThr = std::max(baseThr, 0.5f * pitchRange() + 0.35f);
-    int needed = stabilityHops_;
+    // A legato change (no new attack) passes through an in-between pitch while old and new notes still
+    // overlap in the analysis window; holding out a little longer lets that transient go by. A fresh pluck
+    // has no such overlap, so it is not made to wait.
+    int needed = stabilityHops_ + (sinceOnsetMs_ > 120.0f ? 2 : 0);
     if (std::abs(dev) > 10.0f)
         needed *= 2;
 
@@ -276,7 +392,10 @@ void NoteTracker::update(const PitchFrame& f, float effGateDb, float peakDb, boo
 
     // Smooth movement (vibrato, glide) has to stay beyond the threshold for ~40 ms; an abrupt jump
     // is accepted as soon as it has settled.
-    const bool dwelled = abruptHold_ > 0 || aboveRun_ >= 15;
+    // In MPE, smooth movement belongs to the per-note bend, not to new notes: only an abrupt jump, or running
+    // out of bend range, starts another note.
+    const bool dwelled = p_.mpe ? (abruptHold_ > 0 || std::abs(dev) > 0.9f * p_.mpeBendRange)
+                                : (abruptHold_ > 0 || aboveRun_ >= 15);
     if (std::abs(dev) > switchThr && runCount_ >= needed && slopeRun_ >= needed && dwelled)
     {
         const int cand = static_cast<int>(std::lround(med));
@@ -301,7 +420,7 @@ void NoteTracker::update(const PitchFrame& f, float effGateDb, float peakDb, boo
         }
     }
 
-    if (p_.pitchBend)
+    if (p_.pitchBend || p_.mpe)
         sendBend(med, false, sampleOffset, out);
 }
 

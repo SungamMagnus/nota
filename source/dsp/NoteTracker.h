@@ -34,7 +34,11 @@ private:
 
     // attackDb: the level the velocity is read from (the attack peak, or the current level for a legato change).
     void startNote(int note, float midi, float attackDb, float levelDb, int sampleOffset, EventList& out);
-    int velocityFor(float attackDb) const;
+    float fullDb() const;            // the level that maps to the top velocity (follows the playing when velocityAuto)
+    int velocityFor(float attackDb);
+    void emit(MidiEvent e, EventList& out) const; // stamps the note's MPE channel when MPE is on
+    void sendExpression(const PitchFrame& f, int sampleOffset, EventList& out);
+    float pressureTarget(float levelDb) const;
     void stopNote(int sampleOffset, EventList& out);
     void sendBend(float midi, bool force, int sampleOffset, EventList& out);
     void pushRange(float m);
@@ -53,6 +57,7 @@ private:
     float unvoicedMs_ = 0.0f;
     float retrigMs_ = 0.0f;
     float noteAgeMs_ = 0.0f;
+    float sinceOnsetMs_ = 1e6f; // time since the last detected attack (new pluck / re-articulation)
 
     float hist_[3] { 0, 0, 0 };
     int histCount_ = 0;
@@ -77,6 +82,17 @@ private:
     float latchMinDb_ = 0.0f;
 
     int lastVelocity_ = 0;
+    float velRefDb_ = -200.0f;   // velocityAuto: loudest recent attack (decays slowly)
+
+    // MPE: each note gets the next member channel (2..16, round robin) so a released note's tail is
+    // never bent by the next note's pitch.
+    static constexpr int kFirstMember = 2, kLastMember = 16;
+    int noteChannel_ = 0;
+    int nextMember_ = kFirstMember;
+    float lastBrightness_ = 0.0f;
+    float pressureSmoothed_ = 0.0f, slideSmoothed_ = 0.0f;
+    int lastPressure_ = -1, lastSlide_ = -1;
+    int hopsSincePressure_ = 0, hopsSinceSlide_ = 0, hopsSinceBend_ = 0;
     int lastBend_ = 8192;
     float bendSmoothed_ = 0.0f;
 };

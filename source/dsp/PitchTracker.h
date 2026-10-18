@@ -29,6 +29,13 @@ class PitchTracker
 public:
     static constexpr int kNumScales = 9;
 
+    // Neural-picker input: NSDF of four windows on a log-lag grid (8 .. 554 samples at 12 kHz = 1.5 kHz .. 21.7 Hz).
+    static constexpr int kFeatureScales = 4;
+    static constexpr int kFeatureBins = 96;
+    static constexpr float kFeatureMinLag = 8.0f;
+    static constexpr float kFeatureMaxLag = 554.0f;
+    static constexpr std::array<int, kFeatureScales> kFeatureScaleIndex { 2, 4, 6, 8 }; // windows 192, 360, 664, 1232
+
     void prepare(double decimatedRate, float minHz, float maxHz);
     void reset();
 
@@ -45,6 +52,13 @@ public:
 
     PitchCandidate analyze();
 
+    // Fills out[kFeatureScales * kFeatureBins]; ~four FFT pairs, so call it only when there is a signal.
+    void features(float* out);
+    static float featureLag(int bin);
+
+    // The NSDF peak within +-7% of a lag chosen elsewhere (the neural picker): exact lag and clarity, or invalid.
+    PitchCandidate refineNear(float lag);
+
     // Sum of squares of `len` samples ending `back` samples before the newest one.
     double energy(int back, int len) const
     {
@@ -53,6 +67,19 @@ public:
         {
             const float x = ring_[static_cast<size_t>((writePos_ - 1 - back - i) & kRingMask)];
             e += static_cast<double>(x) * x;
+        }
+        return e;
+    }
+
+    // Same window as energy(), but of x[n] - x[n-1]: relative to energy() this measures spectral tilt.
+    double energyDiff(int back, int len) const
+    {
+        double e = 0.0;
+        for (int i = 0; i < len; ++i)
+        {
+            const float a = ring_[static_cast<size_t>((writePos_ - 1 - back - i) & kRingMask)];
+            const float b = ring_[static_cast<size_t>((writePos_ - 2 - back - i) & kRingMask)];
+            e += static_cast<double>(a - b) * (a - b);
         }
         return e;
     }
@@ -68,6 +95,7 @@ private:
     static constexpr std::array<int, kNumScales> kWindows { 96, 136, 192, 264, 360, 488, 664, 904, 1232 };
 
     PitchCandidate analyzeScale(int scale);
+    int computeNsdf(int scale);
     int lagLimit(int scale) const { return static_cast<int>(kLagFraction * static_cast<float>(kWindows[static_cast<size_t>(scale)])); }
 
     double fs_ = 12000.0;

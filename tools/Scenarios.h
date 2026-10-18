@@ -178,7 +178,9 @@ inline Scenario render(const std::string& name, double fs, Timbre timbre, const 
                 continue;
             }
 
-            const double rel = std::min(1.0, std::max(0.0, (sg.dur - t) / (timbre == Timbre::Voice ? 0.05 : 0.03)));
+            // No release fade when the next note continues legato from exactly here (a hammer-on or slide has no dip).
+            const bool continues = k + 1 < segs.size() && segs[k + 1].legato && std::abs(segs[k + 1].start - (sg.start + sg.dur)) < 1e-6;
+            const double rel = continues ? 1.0 : std::min(1.0, std::max(0.0, (sg.dur - t) / (timbre == Timbre::Voice ? 0.05 : 0.03)));
 
             if (timbre == Timbre::Voice)
             {

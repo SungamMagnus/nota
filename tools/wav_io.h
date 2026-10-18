@@ -12,7 +12,7 @@ namespace nota::io
 struct Wav
 {
     double sampleRate = 0.0;
-    std::vector<float> mono; // first channel only: a DI bass / vocal take is mono anyway
+    std::vector<float> mono; // mean of the channels (what the plug-in does with a stereo sidechain)
 };
 
 // Reads 16/24/32-bit PCM and 32-bit float WAV. Returns false on anything else.
@@ -71,7 +71,10 @@ inline bool readWav(const std::string& path, Wav& out)
     out.mono.resize(frames);
     for (size_t i = 0; i < frames; ++i)
     {
-        const uint8_t* s = d.data() + dataOff + i * bytes * channels;
+        float sum = 0.0f;
+        for (uint32_t ch = 0; ch < channels; ++ch)
+        {
+        const uint8_t* s = d.data() + dataOff + (i * channels + ch) * bytes;
         float v = 0.0f;
         if (isFloat)
         {
@@ -91,7 +94,9 @@ inline bool readWav(const std::string& path, Wav& out)
             int32_t x = static_cast<int32_t>(s[0] | (s[1] << 8) | (s[2] << 16) | (static_cast<uint32_t>(s[3]) << 24));
             v = static_cast<float>(x / 2147483648.0);
         }
-        out.mono[i] = v;
+        sum += v;
+        }
+        out.mono[i] = sum / static_cast<float>(channels);
     }
     return true;
 }

@@ -22,6 +22,10 @@ int main(int argc, char** argv)
             fs = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "--response") && i + 1 < argc)
             p.response = static_cast<float>(std::atof(argv[++i]));
+        else if (!std::strcmp(argv[i], "--neural"))
+            p.neural = true;
+        else if (!std::strcmp(argv[i], "--neural-pure"))
+            p.neural = p.neuralPure = true;
         else if (!std::strcmp(argv[i], "--verbose"))
             verbose = true;
     }

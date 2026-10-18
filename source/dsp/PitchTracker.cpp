@@ -45,18 +45,19 @@ void PitchTracker::reset()
     filled_ = 0;
 }
 
-PitchCandidate PitchTracker::analyzeScale(int scale)
+// Normalised square difference function of the newest window of this scale into nsdf_[0..limit+1].
+// Returns the usable lag limit, or -1 when there is not enough (or no) signal.
+int PitchTracker::computeNsdf(int scale)
 {
-    PitchCandidate out;
     const int w = kWindows[static_cast<size_t>(scale)];
     if (filled_ < w)
-        return out;
+        return -1;
 
     const Fft& fft = ffts_[static_cast<size_t>(scale)];
     const int n = fft.size();
     const int limit = lagLimit(scale);
     if (limit <= minLag_ + 2)
-        return out;
+        return -1;
 
     // Copy the newest w samples (oldest first), zero-pad.
     const long long start = writePos_ - w;
@@ -80,16 +81,94 @@ PitchCandidate PitchTracker::analyzeScale(int scale)
     }
     fft.transform(re_.data(), im_.data(), true);
 
-    // Normalised square difference function.
     const double total = cumEnergy_[static_cast<size_t>(w)];
     if (total < 1e-12)
-        return out;
+        return -1;
 
     for (int tau = 0; tau <= limit + 1; ++tau)
     {
         const double m = cumEnergy_[static_cast<size_t>(w - tau)] + (total - cumEnergy_[static_cast<size_t>(tau)]);
         nsdf_[static_cast<size_t>(tau)] = m > 1e-12 ? static_cast<float>(2.0 * re_[static_cast<size_t>(tau)] / m) : 0.0f;
     }
+    return limit;
+}
+
+float PitchTracker::featureLag(int bin)
+{
+    return kFeatureMinLag * std::pow(kFeatureMaxLag / kFeatureMinLag, static_cast<float>(bin) / static_cast<float>(kFeatureBins - 1));
+}
+
+// NSDF of a few windows, resampled onto a log-spaced lag grid: the input the neural picker sees.
+// Scales that cannot see a given lag (or that have no signal yet) contribute zeros there.
+void PitchTracker::features(float* out)
+{
+    std::fill(out, out + kFeatureScales * kFeatureBins, 0.0f);
+    for (int k = 0; k < kFeatureScales; ++k)
+    {
+        const int limit = computeNsdf(kFeatureScaleIndex[static_cast<size_t>(k)]);
+        if (limit < 0)
+            continue;
+        float* row = out + k * kFeatureBins;
+        for (int b = 0; b < kFeatureBins; ++b)
+        {
+            const float lag = featureLag(b);
+            if (lag > static_cast<float>(limit))
+                break;
+            const int i = static_cast<int>(lag);
+            const float fr = lag - static_cast<float>(i);
+            row[b] = nsdf_[static_cast<size_t>(i)] * (1.0f - fr) + nsdf_[static_cast<size_t>(i) + 1] * fr;
+        }
+    }
+}
+
+PitchCandidate PitchTracker::refineNear(float lag)
+{
+    PitchCandidate out;
+    int scale = kNumScales - 1;
+    for (int s = 0; s < kNumScales; ++s)
+        if (static_cast<float>(lagLimit(s)) >= lag * 1.1f)
+        {
+            scale = s;
+            break;
+        }
+
+    const int limit = computeNsdf(scale);
+    if (limit < 0)
+        return out;
+
+    const int lo = std::max(minLag_, static_cast<int>(std::floor(lag * 0.93f)));
+    const int hi = std::min(limit - 1, static_cast<int>(std::ceil(lag * 1.07f)));
+    if (hi <= lo || lo < 2)
+        return out;
+
+    int best = lo;
+    for (int i = lo; i <= hi; ++i)
+        if (nsdf_[static_cast<size_t>(i)] > nsdf_[static_cast<size_t>(best)])
+            best = i;
+
+    const float y0 = nsdf_[static_cast<size_t>(best) - 1];
+    const float y1 = nsdf_[static_cast<size_t>(best)];
+    const float y2 = nsdf_[static_cast<size_t>(best) + 1];
+    const float denom = y0 - 2.0f * y1 + y2;
+    float delta = 0.0f, peak = y1;
+    if (std::abs(denom) > 1e-9f)
+    {
+        delta = std::clamp(0.5f * (y0 - y2) / denom, -1.0f, 1.0f);
+        peak = y1 - 0.25f * (y0 - y2) * delta;
+    }
+    out.valid = true;
+    out.lag = static_cast<float>(best) + delta;
+    out.clarity = std::min(peak, 1.0f);
+    out.scale = scale;
+    return out;
+}
+
+PitchCandidate PitchTracker::analyzeScale(int scale)
+{
+    PitchCandidate out;
+    const int limit = computeNsdf(scale);
+    if (limit < 0)
+        return out;
 
     // Key maxima: the highest point of every positive lobe after the first zero crossing.
     int tau = 1;

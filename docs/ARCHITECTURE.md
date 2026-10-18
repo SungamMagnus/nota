@@ -72,48 +72,32 @@ is in the *low* range, which is what Phase 2 attacks.
 * Pitch bend currently follows deviation up to the bend range, with no
   glide-vs-jump classifier (a hammer-on is a new note, a slide is a bend).
 
-## Phase 2 — neural front-end (next)
+## Phase 2 — neural picker (built, optional "AI Assist")
 
-Goal: make the same hop-synchronous interface (`PitchFrame` per 2.7 ms) come
-from, or be fused with, a small **streaming neural model** running in the audio
-thread.
+A small recurrent network (GRU, 186k weights, ~170k multiply-adds per 2.7 ms hop, ~6% of one core) reads the multi-scale
+NSDF the plug-in already computes (four windows on a log-lag grid), the classical tracker's own answer, and the level.
+It outputs a distribution over 96 log-lag bins plus "unvoiced". The exact pitch still comes from the NSDF peak next to
+the chosen bin; the network picks *which* peak (fixing octave and harmonic slips) and whether anything is voiced.
+`training/` holds the whole pipeline; the C++ forward pass is checked against PyTorch to 2e-3 in the tests.
 
-**Model** (target ≤ 150 k parameters, a few µs per hop on Apple silicon):
+**Hybrid rule (what ships behind the switch).** Measured on 34 minutes of real bass and voice against an offline pYIN
+reference, the network is clearly better above ~160 Hz and not better in the bass. So the bass range stays classical,
+and the network corrects and vetoes: it may start a pitch the classical tracker missed only when 97% sure.
 
-* learned filterbank front-end: strided causal Conv1D on the 12 kHz signal
-* 2–3 causal dilated conv blocks → 1–2 GRU layers (state carried across hops)
-* heads: pitch posterior over ~260 bins (25 cent resolution, 26 Hz – 1.3 kHz),
-  voicing, **onset**, and an *early-confidence* output
-* cents refinement stays with the NSDF peak (sub-cent accurate); the network
-  supplies **which peak** is the fundamental (octave errors), **whether** it is
-  voiced, and **when** a new note starts
+| real recordings, note held vs reference note | classical | AI Assist |
+|---|---|---|
+| voice: right-note frames | 0.770 | **0.801** |
+| voice: octave slips | 3.2% | **0.4%** |
+| voice: notes shorter than 80 ms (blips) | 585 | **515** |
+| bass: right-note frames | 0.807 | 0.806 (unchanged by design) |
+| held-out bass file / held-out voice file | 0.77 / 0.82 | 0.77 / 0.81 (no regression, no gain) |
+| synthetic hard suite: notes found / false notes | 115 / 2 | 115 / 5 |
+| CPU | 0.5% of a core | ~6% |
 
-**Why it lowers latency:** trained on windows that *end* a fraction of a period
-after an onset, with a loss that rewards a correct posterior early and a calibrated
-confidence. `NoteTracker` then fires on confidence instead of waiting a fixed
-number of hops, and the *Response* control becomes a real accuracy/speed knob.
-
-**Training data** (all offline, in `training/`):
-
-1. *Synthetic with exact labels* — grow `tools/TestSignals.h` into a generator:
-   physical-modelled plucked/fretted/slapped bass, DI + amp/cab/distortion
-   chains, compressor, formant-filtered voices with vibrato/glides/breath/
-   consonants, room reverb, hum and noise. Free, unlimited, perfectly labelled.
-2. *Teacher distillation on real audio* — label any real recordings (including
-   your own bass and voice) with a heavy offline teacher (CREPE-full / pYIN /
-   RMVPE-class) and train the tiny causal student on those labels. No manual
-   annotation.
-3. *Public sets for evaluation/fine-tuning* where licences allow (vocal: MIR-1K,
-   vocadito, PTDB-TUG; guitar/bass: GuitarSet, EGDB).
-
-**Runtime:** [RTNeural](https://github.com/jatinchowdhury18/RTNeural) —
-header-only, allocation-free, built for audio threads (Conv1D, GRU, dense). Core
-ML / ONNX Runtime are poor fits here: per-call overhead and non-deterministic
-timing.
-
-**Evaluation:** the same `nota_bench` sweep plus real recordings, scored by
-onset latency distribution, octave-error rate, and note-level F1 (mir_eval).
-Phase 1 numbers above are the baseline the model has to beat.
+**Honest limits.** The reference is pYIN, not a human transcription. The large voice gain is on two high-register
+takes whose validation chunks come from the same sessions as training; on a second, unseen singer the two modes were
+level. Latency is unchanged: the network sees the same windows, so it cannot beat the two-period physical limit.
+Next: more bass material (the bass range is where the network is weakest), then evaluate on other singers and rooms.
 
 ## Phase 3 — musical polish
 

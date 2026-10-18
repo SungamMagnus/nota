@@ -1,5 +1,14 @@
 #include "Fft.h"
 #include "Eval.h"
+#include "PickerNet.h"
+// The picker parity test needs the reference vectors generated from the trained network (training/export_model.py). They are not
+// part of the public repository, so the test is skipped when they, or the weights, are absent.
+#if defined(__has_include)
+#if __has_include("picker_reference.h")
+#include "picker_reference.h"
+#define NOTA_HAVE_PICKER_REF 1
+#endif
+#endif
 #include "PitchTracker.h"
 #include "TestSignals.h"
 
@@ -286,6 +295,252 @@ static void testVelocity()
     CHECK(velocityOf(0.12, sens) > velocityOf(0.12, def), "lower full level should raise velocity (%d vs %d)",
           velocityOf(0.12, sens), velocityOf(0.12, def));
     CHECK(velocityOf(0.5, def, Timbre::Voice, 57) > velocityOf(0.03, def, Timbre::Voice, 57), "voice velocity does not follow level");
+
+    // The scale covers velocityRangeDb under the full level, not the whole gate-to-full distance: ordinary playing
+    // (a few dB below the top) must not sit at the top, and a note 30+ dB down is near the bottom.
+    CHECK(velocityOf(0.2, def) < 110, "a note 14 dB under full should not be near 127 (%d)", velocityOf(0.2, def));
+    CHECK(velocityOf(0.02, def) < 45, "a note 30 dB under full should be near the bottom (%d)", velocityOf(0.02, def));
+    Params wide = def;
+    wide.velocityRangeDb = 55.0f;
+    CHECK(velocityOf(0.2, wide) > velocityOf(0.2, def), "a wider range should raise mid-level velocity");
+
+    // Auto level: the full level follows the loudest recent attack, so a hot input and a quiet one both use the range.
+    {
+        const double fs = 48000.0;
+        auto secondOf = [&](double loud, double soft, bool autoLevel) {
+            Params p = def;
+            p.velocityAuto = autoLevel;
+            Engine engine;
+            engine.prepare(fs);
+            engine.setParams(p);
+            NoteSpec a, b;
+            a.midi = 38; a.start = 0.1; a.dur = 0.4; a.gain = loud;
+            b.midi = 43; b.start = 0.8; b.dur = 0.4; b.gain = soft;
+            const auto ons = notesOn(runEngine(engine, renderSequence(fs, 1.4, { a, b }, Timbre::BassPluck)));
+            return ons.size() == 2 ? std::make_pair(static_cast<int>(ons[0].data2), static_cast<int>(ons[1].data2)) : std::make_pair(-1, -1);
+        };
+        const auto fixedHot = secondOf(1.0, 0.25, false);   // hot track: both notes above the fixed full level
+        const auto autoHot = secondOf(1.0, 0.25, true);
+        CHECK(fixedHot.first >= 125 && fixedHot.second >= 110, "fixed full level: hot input should saturate (%d, %d)", fixedHot.first, fixedHot.second);
+        CHECK(autoHot.second < fixedHot.second - 15, "auto: the softer note should land well below the loud one (%d vs fixed %d)", autoHot.second, fixedHot.second);
+        CHECK(autoHot.first >= 120, "auto: the loudest note is at the top (%d)", autoHot.first);
+        // The auto level never falls below velocityFullDb (that dial is the way to adapt to a very quiet source).
+        const auto quietAuto = secondOf(0.04, 0.04, true), quietFixed = secondOf(0.04, 0.04, false);
+        CHECK(quietAuto == quietFixed, "auto: a quiet input behaves like the fixed full level (%d,%d vs %d,%d)", quietAuto.first, quietAuto.second,
+              quietFixed.first, quietFixed.second);
+    }
+}
+
+// ---- MPE --------------------------------------------------------------------------------------
+
+struct MpeRun
+{
+    std::vector<MidiEvent> events;
+    std::vector<long long> samples;
+};
+
+static MpeRun runMpe(const Params& p, const std::vector<float>& audio, double fs = 48000.0)
+{
+    Engine engine;
+    engine.prepare(fs);
+    engine.setParams(p);
+    MpeRun r;
+    EventList list;
+    for (size_t pos = 0; pos < audio.size(); pos += 128)
+    {
+        const int n = static_cast<int>(std::min<size_t>(128, audio.size() - pos));
+        list.clear();
+        engine.process(audio.data() + pos, n, list);
+        for (int i = 0; i < list.count; ++i)
+        {
+            r.events.push_back(list.events[i]);
+            r.samples.push_back(static_cast<long long>(pos) + list.events[i].sampleOffset);
+        }
+    }
+    return r;
+}
+
+static int lastValue(const MpeRun& r, MidiEvent::Type t, int ccNumber = -1)
+{
+    int v = -1;
+    for (const auto& e : r.events)
+        if (e.type == t && (ccNumber < 0 || e.data1 == ccNumber))
+            v = t == MidiEvent::Type::PitchBend ? e.bend : (t == MidiEvent::Type::Cc ? e.data2 : e.data1);
+    return v;
+}
+
+static int countOf(const MpeRun& r, MidiEvent::Type t, int ccNumber = -1)
+{
+    int n = 0;
+    for (const auto& e : r.events)
+        n += e.type == t && (ccNumber < 0 || e.data1 == ccNumber);
+    return n;
+}
+
+static void testMpe()
+{
+    std::printf("mpe\n");
+    const double fs = 48000.0;
+    Params mpe;
+    mpe.mpe = true;
+
+    // A note 30 cents sharp: note number is the nearest semitone, the rest is that note's own bend.
+    {
+        NoteSpec n;
+        n.midi = 40.3;
+        n.start = 0.1;
+        n.dur = 0.5;
+        const auto r = runMpe(mpe, renderSequence(fs, 0.8, { n }, Timbre::BassPluck));
+        int onIdx = -1;
+        for (size_t i = 0; i < r.events.size(); ++i)
+            if (r.events[i].type == MidiEvent::Type::NoteOn)
+                onIdx = static_cast<int>(i);
+        CHECK(onIdx >= 0, "no note-on");
+        if (onIdx >= 0)
+        {
+            const auto& on = r.events[static_cast<size_t>(onIdx)];
+            CHECK(on.data1 == 40, "note %d", on.data1);
+            CHECK(on.channel >= 2 && on.channel <= 16, "channel %d is not a member channel", on.channel);
+            bool bendBefore = false, pressureBefore = false, slideBefore = false;
+            for (int i = 0; i < onIdx; ++i)
+            {
+                CHECK(r.events[static_cast<size_t>(i)].channel == on.channel, "expression on channel %d, note on %d",
+                      r.events[static_cast<size_t>(i)].channel, on.channel);
+                bendBefore |= r.events[static_cast<size_t>(i)].type == MidiEvent::Type::PitchBend;
+                pressureBefore |= r.events[static_cast<size_t>(i)].type == MidiEvent::Type::ChannelPressure;
+                slideBefore |= r.events[static_cast<size_t>(i)].type == MidiEvent::Type::Cc;
+            }
+            CHECK(bendBefore && pressureBefore && slideBefore, "expression must precede the note-on (%d %d %d)", bendBefore, pressureBefore, slideBefore);
+            const int expected = 8192 + static_cast<int>(0.3 / 48.0 * 8191.0);
+            const int bend = lastValue(r, MidiEvent::Type::PitchBend);
+            CHECK(std::abs(bend - expected) < 45, "bend %d, expected about %d (0.3 st of 48)", bend, expected);
+        }
+        // Note-off lands on the note's own channel.
+        for (const auto& e : r.events)
+            if (e.type == MidiEvent::Type::NoteOff)
+                CHECK(e.channel >= 2, "note-off on channel %d", e.channel);
+    }
+
+    // Successive notes rotate through the member channels.
+    {
+        std::vector<NoteSpec> notes;
+        for (int i = 0; i < 4; ++i)
+            notes.push_back({ 33.0 + 2 * i, 0.1 + 0.4 * i, 0.3, 0.0, 0.5 });
+        const auto r = runMpe(mpe, renderSequence(fs, 2.0, notes, Timbre::BassPluck));
+        std::vector<int> chans;
+        for (const auto& e : r.events)
+            if (e.type == MidiEvent::Type::NoteOn)
+                chans.push_back(e.channel);
+        CHECK(chans.size() == 4, "expected 4 notes, got %zu", chans.size());
+        for (size_t i = 1; i < chans.size(); ++i)
+            CHECK(chans[i] != chans[i - 1], "notes %zu and %zu share channel %d", i - 1, i, chans[i]);
+    }
+
+    // A smooth glide is one note carrying a bend, not a string of new notes.
+    {
+        std::vector<Seg> segs(2);
+        segs[0] = { 33.0, 0.1, 0.5, false, 0.0, 0.5 };
+        segs[1] = { 38.0, 0.6, 0.6, true, 250.0, 0.5 }; // legato slide up 5 semitones
+        const auto sc = render("glide", fs, Timbre::BassPluck, segs, {});
+        const auto r = runMpe(mpe, sc.audio);
+        CHECK(countOf(r, MidiEvent::Type::NoteOn) == 1, "glide produced %d notes", countOf(r, MidiEvent::Type::NoteOn));
+        const int bend = lastValue(r, MidiEvent::Type::PitchBend);
+        const int expected = 8192 + static_cast<int>(5.0 / 48.0 * 8191.0);
+        CHECK(std::abs(bend - expected) < 160, "glide ended at bend %d, expected about %d", bend, expected);
+
+        // The same glide in standard mode is allowed to retrigger (it is not bend-carrying).
+        Params std_;
+        const auto rs = runMpe(std_, sc.audio);
+        for (const auto& e : rs.events)
+            CHECK(e.channel == 0, "standard mode stamped a channel (%d)", e.channel);
+    }
+
+    // Vibrato stays one note and shows up as bend.
+    {
+        NoteSpec n;
+        n.midi = 57.0;
+        n.start = 0.1;
+        n.dur = 0.8;
+        n.vibratoCents = 60.0;
+        const auto r = runMpe(mpe, renderSequence(fs, 1.1, { n }, Timbre::Voice));
+        CHECK(countOf(r, MidiEvent::Type::NoteOn) == 1, "vibrato note produced %d note-ons", countOf(r, MidiEvent::Type::NoteOn));
+        CHECK(countOf(r, MidiEvent::Type::PitchBend) >= 20, "only %d bend messages for a vibrato", countOf(r, MidiEvent::Type::PitchBend));
+    }
+
+    // Pressure follows level.
+    {
+        NoteSpec loud, quiet;
+        loud.midi = quiet.midi = 38.0;
+        loud.start = quiet.start = 0.1;
+        loud.dur = quiet.dur = 0.5;
+        loud.gain = 0.9;
+        quiet.gain = 0.04;
+        const int pl = lastValue(runMpe(mpe, renderSequence(fs, 0.8, { loud }, Timbre::BassPluck)), MidiEvent::Type::ChannelPressure);
+        const int pq = lastValue(runMpe(mpe, renderSequence(fs, 0.8, { quiet }, Timbre::BassPluck)), MidiEvent::Type::ChannelPressure);
+        CHECK(pl >= 0 && pq >= 0 && pl > pq + 15, "pressure loud %d vs quiet %d", pl, pq);
+    }
+
+    // Slide (CC74) follows brightness: a sawtooth is brighter than a sine at the same level.
+    {
+        std::vector<float> sine(static_cast<size_t>(fs * 0.8)), saw(sine.size());
+        for (size_t i = 0; i < sine.size(); ++i)
+        {
+            const double t = static_cast<double>(i) / fs;
+            const double env = t < 0.1 ? 0.0 : 1.0;
+            sine[i] = static_cast<float>(0.3 * env * std::sin(2.0 * kPi * 110.0 * t));
+            double v = 0.0;
+            for (int h = 1; h <= 25; ++h)
+                v += std::sin(2.0 * kPi * 110.0 * h * t) / h;
+            saw[i] = static_cast<float>(0.25 * env * v);
+        }
+        const int cs = lastValue(runMpe(mpe, sine), MidiEvent::Type::Cc, 74);
+        const int cw = lastValue(runMpe(mpe, saw), MidiEvent::Type::Cc, 74);
+        CHECK(cs >= 0 && cw >= 0 && cw > cs + 30, "slide: sine %d, saw %d", cs, cw);
+    }
+
+    // Each expression can be switched off.
+    {
+        NoteSpec n;
+        n.midi = 38.0;
+        n.start = 0.1;
+        n.dur = 0.5;
+        const auto audio = renderSequence(fs, 0.8, { n }, Timbre::BassPluck);
+        Params noP = mpe, noS = mpe;
+        noP.mpePressure = false;
+        noS.mpeSlide = false;
+        CHECK(countOf(runMpe(noP, audio), MidiEvent::Type::ChannelPressure) == 0, "pressure not off");
+        CHECK(countOf(runMpe(noS, audio), MidiEvent::Type::Cc, 74) == 0, "slide not off");
+    }
+}
+
+// The C++ forward pass must reproduce PyTorch's logits for real feature frames (generated reference).
+static void testPickerParity()
+{
+#if defined(NOTA_HAVE_PICKER_REF) && !defined(NOTA_NO_NEURAL)
+    std::printf("picker parity\n");
+    PickerNet net;
+    net.reset();
+    float logits[PickerNet::kOut];
+    double worst = 0.0;
+    int argmaxMismatch = 0;
+    for (int h = 0; h < kRefHops; ++h)
+    {
+        net.step(kRefInput + h * PickerNet::kIn, logits);
+        int a = 0, b = 0;
+        for (int i = 0; i < PickerNet::kOut; ++i)
+        {
+            const float ref = kRefLogits[h * PickerNet::kOut + i];
+            worst = std::max(worst, static_cast<double>(std::abs(logits[i] - ref)));
+            a = logits[i] > logits[a] ? i : a;
+            b = ref > kRefLogits[h * PickerNet::kOut + b] ? i : b;
+        }
+        argmaxMismatch += a != b;
+    }
+    CHECK(worst < 2e-3, "largest logit difference to PyTorch: %g", worst);
+    CHECK(argmaxMismatch == 0, "%d hops pick a different class than PyTorch", argmaxMismatch);
+#else
+    std::printf("picker parity (skipped: no trained weights / reference vectors in this build)\n");
+#endif
 }
 
 // The hard-scenario suite (tools/Scenarios.h): legato, slides, distortion, hum, reverb, vibrato...
@@ -325,6 +580,8 @@ int main()
     testSilenceAndNoise();
     testPitchBend();
     testVelocity();
+    testMpe();
+    testPickerParity();
     testScenarioSuite();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
