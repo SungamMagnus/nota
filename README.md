@@ -1,4 +1,4 @@
-# Nota
+# Nóta
 
 Real-time **monophonic audio → MIDI** for bass guitar and voice. One tracker covers
 ~26 Hz – 1.3 kHz, so there is no mode to pick. A VST3 instrument, built with
