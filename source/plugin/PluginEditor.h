@@ -31,14 +31,18 @@ private:
     float scale() const { return static_cast<float>(getWidth()) / kDesignW; }
     juce::Rectangle<int> toPixels(juce::Rectangle<float> design) const;
     void drawReadout(juce::Graphics&) const;
+    void updateModeVisibility();
     void drawVelocity(juce::Graphics&) const;
     void drawStatus(juce::Graphics&) const;
 
     NotaProcessor& proc_;
 
-    std::unique_ptr<sungam::Knob> gate_, response_, release_, retrigger_, bendRange_, transpose_, tuning_, channel_, velFull_;
+    std::unique_ptr<sungam::Knob> gate_, response_, release_, retrigger_, bendRange_, transpose_, tuning_, channel_, velFull_, mpeBend_;
     std::unique_ptr<sungam::Latch> bend_;
+    std::unique_ptr<sungam::Latch> pressure_, slide_, ai_;
+    std::unique_ptr<sungam::Selector> mode_;
     std::unique_ptr<sungam::RangeBar> velRange_;
+    std::unique_ptr<juce::ParameterAttachment> modeWatcher_;
     std::unique_ptr<sungam::Selector> range_;
     std::unique_ptr<juce::ParameterAttachment> bendWatcher_;
 

@@ -28,6 +28,8 @@ NotaEditor::NotaEditor(NotaProcessor& p) : juce::AudioProcessorEditor(&p), proc_
     release_ = std::make_unique<Knob>(param("release"), "Release", kCoral, kCoral, 20.0f, false,
                                       [](float v) { return juce::String(juce::roundToInt(v)) + " dB"; });
     range_ = std::make_unique<Selector>(static_cast<juce::AudioParameterChoice&>(param("range")), kCoral);
+    ai_ = std::make_unique<Latch>(param("neural"), "AI ASSIST", kCoral, 192.0f);
+    addAndMakeVisible(*ai_);
 
     // NOTE — what a note does (teal).
     retrigger_ = std::make_unique<Knob>(param("retrigger"), "Retrigger", kTeal, kTeal, 20.0f, false,
@@ -48,7 +50,7 @@ NotaEditor::NotaEditor(NotaProcessor& p) : juce::AudioProcessorEditor(&p), proc_
     });
     tuning_ = std::make_unique<Knob>(param("tuning"), "Tuning", kSteel, kSteelText, 20.0f, true,
                                      [](float v) { return juce::String(v, 1) + " Hz"; });
-    channel_ = std::make_unique<Knob>(param("channel"), "MIDI channel", kSteel, kSteelText, 15.0f, false,
+    channel_ = std::make_unique<Knob>(param("channel"), "Channel", kSteel, kSteelText, 20.0f, false,
                                       [](float v) { return juce::String(juce::roundToInt(v)); });
 
     for (juce::Component* c : { static_cast<juce::Component*>(gate_.get()), static_cast<juce::Component*>(response_.get()),
@@ -59,6 +61,21 @@ NotaEditor::NotaEditor(NotaProcessor& p) : juce::AudioProcessorEditor(&p), proc_
                                 static_cast<juce::Component*>(transpose_.get()), static_cast<juce::Component*>(tuning_.get()),
                                 static_cast<juce::Component*>(channel_.get()) })
         addAndMakeVisible(*c);
+
+    // MPE: one channel per note, so each note carries its own bend / pressure / slide.
+    mpeBend_ = std::make_unique<Knob>(param("mpeBend"), "MPE bend", kTeal, kTeal, 20.0f, false,
+                                      [](float v) { return juce::String(juce::roundToInt(v)) + " st"; });
+    pressure_ = std::make_unique<Latch>(param("mpePressure"), "PRESSURE", kTeal, 92.0f);
+    slide_ = std::make_unique<Latch>(param("mpeSlide"), "SLIDE", kTeal, 92.0f);
+    mode_ = std::make_unique<Selector>(static_cast<juce::AudioParameterChoice&>(param("mode")), kSteel);
+    for (juce::Component* c : { static_cast<juce::Component*>(mpeBend_.get()), static_cast<juce::Component*>(pressure_.get()),
+                                static_cast<juce::Component*>(slide_.get()), static_cast<juce::Component*>(mode_.get()),
+                                })
+        addAndMakeVisible(*c);
+
+    // The NOTE column and the channel knob follow the output mode.
+    modeWatcher_ = std::make_unique<juce::ParameterAttachment>(param("mode"), [this](float) { updateModeVisibility(); });
+    modeWatcher_->sendInitialUpdate();
 
     // Bend range means nothing until pitch bend is on.
     bendWatcher_ = std::make_unique<juce::ParameterAttachment>(param("bend"), [this](float v) { bendRange_->setActive(v > 0.5f); });
@@ -71,6 +88,17 @@ NotaEditor::NotaEditor(NotaProcessor& p) : juce::AudioProcessorEditor(&p), proc_
 }
 
 NotaEditor::~NotaEditor() = default;
+
+void NotaEditor::updateModeVisibility()
+{
+    const bool mpe = proc_.apvts.getRawParameterValue("mode")->load() > 0.5f;
+    bend_->setVisible(!mpe);
+    bendRange_->setVisible(!mpe);
+    mpeBend_->setVisible(mpe);
+    pressure_->setVisible(mpe);
+    slide_->setVisible(mpe);
+    channel_->setActive(!mpe); // MPE chooses its own channels
+}
 
 juce::Rectangle<int> NotaEditor::toPixels(juce::Rectangle<float> d) const
 {
@@ -94,15 +122,21 @@ void NotaEditor::resized()
     place(*gate_, 52.0f, kRowA);
     place(*response_, 128.0f, kRowA - 6.0f);
     place(*release_, 204.0f, kRowA);
-    placeAt(*range_, 36.0f, kRowBCentre - 3.0f);
+    placeAt(*range_, 36.0f, kRowBCentre - 9.0f);
+    placeAt(*ai_, 36.0f, kRowBCentre + 21.0f);
 
     place(*retrigger_, 300.0f, kRowA);
     place(*bendRange_, 420.0f, kRowA);
-    placeAt(*bend_, 264.0f, kRowBCentre - 0.5f);
+    placeAt(*bend_, 264.0f, kRowBCentre - 6.5f);
 
-    place(*transpose_, 532.0f, kRowA);
-    place(*tuning_, 652.0f, kRowA);
-    place(*channel_, 592.0f, kRowBCentre - 34.0f - 15.0f);
+    place(*mpeBend_, 420.0f, kRowA);
+    placeAt(*pressure_, 264.0f, kRowBCentre - 6.5f);
+    placeAt(*slide_, 364.0f, kRowBCentre - 6.5f);
+
+    place(*transpose_, 504.0f, kRowA);
+    place(*tuning_, 588.0f, kRowA);
+    place(*channel_, 672.0f, kRowA);
+    placeAt(*mode_, 496.0f, kRowBCentre - 9.0f);
 
     placeAt(*velRange_, 140.0f, kStripTop + 14.0f);
     place(*velFull_, 400.0f, kStripTop + 10.0f);
@@ -299,7 +333,9 @@ void NotaEditor::paint(juce::Graphics& g)
 
     g.setColour(ink(0.62f));
     g.setFont(mono(8.5f, false, 0.02f));
-    g.drawText("RANGE", juce::Rectangle<float>(36.0f, kRowBCentre - 21.0f, 192.0f, 12.0f), juce::Justification::centred, false);
+    g.drawText("RANGE", juce::Rectangle<float>(36.0f, kRowBCentre - 27.0f, 192.0f, 12.0f), juce::Justification::centred, false);
+
+    g.drawText("MODE", juce::Rectangle<float>(496.0f, kRowBCentre - 27.0f, 192.0f, 12.0f), juce::Justification::centred, false);
 
     drawVelocity(g);
     drawStatus(g);

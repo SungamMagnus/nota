@@ -58,6 +58,9 @@ private:
     nota::Params readParams() const;
     void emit(const nota::EventList& events, juce::MidiBuffer& midi);
     void releaseHeldNote(juce::MidiBuffer* midi);
+    void sendCc(juce::MidiBuffer& midi, int channel, int cc, int value);
+    void sendRpn(juce::MidiBuffer& midi, int channel, int msb, int lsb, int dataMsb);
+    void sendMpeConfig(juce::MidiBuffer& midi, bool on, int bendRange);
 
     nota::Engine engine_;
     std::vector<float> mono_;
@@ -65,6 +68,10 @@ private:
 
     int heldNote_ = -1; // note number currently sounding on the output (after transpose)
     int heldChannel_ = 1;
+
+    bool mpeActive_ = false;   // mode the host has been told about
+    int mpeRangeSent_ = -1;
+    bool configDirty_ = true;
 
     std::atomic<float>* pGate_ = nullptr;
     std::atomic<float>* pRelease_ = nullptr;
@@ -79,6 +86,11 @@ private:
     std::atomic<float>* pTuning_ = nullptr;
     std::atomic<float>* pRetrigger_ = nullptr;
     std::atomic<float>* pChannel_ = nullptr;
+    std::atomic<float>* pMode_ = nullptr;
+    std::atomic<float>* pNeural_ = nullptr;
+    std::atomic<float>* pMpeBend_ = nullptr;
+    std::atomic<float>* pMpePressure_ = nullptr;
+    std::atomic<float>* pMpeSlide_ = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NotaProcessor)
 };

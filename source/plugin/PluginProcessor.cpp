@@ -16,6 +16,11 @@ constexpr const char* kVelFull = "velFull";
 constexpr const char* kTuning = "tuning";
 constexpr const char* kRetrigger = "retrigger";
 constexpr const char* kChannel = "channel";
+constexpr const char* kMode = "mode";
+constexpr const char* kNeural = "neural";
+constexpr const char* kMpeBend = "mpeBend";
+constexpr const char* kMpePressure = "mpePressure";
+constexpr const char* kMpeSlide = "mpeSlide";
 
 juce::ParameterID pid(const char* id) { return { id, 1 }; }
 } // namespace
@@ -44,6 +49,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout NotaProcessor::createLayout(
     l.add(std::make_unique<AudioParameterFloat>(pid(kTuning), "Tuning", NormalisableRange<float>(415.0f, 466.0f, 0.1f), 440.0f,
                                                 AudioParameterFloatAttributes().withLabel("Hz")));
     l.add(std::make_unique<AudioParameterInt>(pid(kChannel), "MIDI Channel", 1, 16, 1));
+    l.add(std::make_unique<AudioParameterChoice>(pid(kMode), "Output Mode", StringArray { "Standard", "MPE" }, 0));
+    l.add(std::make_unique<AudioParameterBool>(pid(kNeural), "AI Assist", false));
+    l.add(std::make_unique<AudioParameterFloat>(pid(kMpeBend), "MPE Bend Range", NormalisableRange<float>(1.0f, 48.0f, 1.0f), 48.0f,
+                                                AudioParameterFloatAttributes().withLabel("st")));
+    l.add(std::make_unique<AudioParameterBool>(pid(kMpePressure), "MPE Pressure", true));
+    l.add(std::make_unique<AudioParameterBool>(pid(kMpeSlide), "MPE Slide", true));
     return l;
 }
 
@@ -64,6 +75,11 @@ NotaProcessor::NotaProcessor()
     pTuning_ = apvts.getRawParameterValue(kTuning);
     pRetrigger_ = apvts.getRawParameterValue(kRetrigger);
     pChannel_ = apvts.getRawParameterValue(kChannel);
+    pMode_ = apvts.getRawParameterValue(kMode);
+    pNeural_ = apvts.getRawParameterValue(kNeural);
+    pMpeBend_ = apvts.getRawParameterValue(kMpeBend);
+    pMpePressure_ = apvts.getRawParameterValue(kMpePressure);
+    pMpeSlide_ = apvts.getRawParameterValue(kMpeSlide);
 }
 
 // No main input; the audio to analyse arrives on an optional sidechain; the (silent) output is stereo.
@@ -100,6 +116,11 @@ nota::Params NotaProcessor::readParams() const
     p.velocityFullDb = pVelFull_->load();
     p.tuningHz = pTuning_->load();
     p.retriggerDb = pRetrigger_->load();
+    p.mpe = pMode_->load() > 0.5f;
+    p.neural = pNeural_->load() > 0.5f;
+    p.mpeBendRange = pMpeBend_->load();
+    p.mpePressure = pMpePressure_->load() > 0.5f;
+    p.mpeSlide = pMpeSlide_->load() > 0.5f;
     return p;
 }
 
@@ -108,12 +129,39 @@ void NotaProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     engine_.prepare(sampleRate);
     mono_.assign(static_cast<size_t>(std::max(samplesPerBlock, 1024)), 0.0f);
     heldNote_ = -1;
+    configDirty_ = true;
 }
 
 void NotaProcessor::releaseResources()
 {
     releaseHeldNote(nullptr);
     engine_.reset();
+}
+
+void NotaProcessor::sendCc(juce::MidiBuffer& midi, int channel, int cc, int value)
+{
+    midi.addEvent(juce::MidiMessage::controllerEvent(channel, cc, value), 0);
+}
+
+// Registered-parameter write: select RPN, set data, then null the selection so later CCs are not misread.
+void NotaProcessor::sendRpn(juce::MidiBuffer& midi, int channel, int msb, int lsb, int dataMsb)
+{
+    sendCc(midi, channel, 101, msb);
+    sendCc(midi, channel, 100, lsb);
+    sendCc(midi, channel, 6, dataMsb);
+    sendCc(midi, channel, 38, 0);
+    sendCc(midi, channel, 101, 127);
+    sendCc(midi, channel, 100, 127);
+}
+
+// MPE lower zone: master channel 1, member channels 2..16 (RPN 6 on the master), and the per-note
+// pitch-bend range on every member channel (RPN 0). Switching back sends a zone with no members.
+void NotaProcessor::sendMpeConfig(juce::MidiBuffer& midi, bool on, int bendRange)
+{
+    sendRpn(midi, 1, 0, 6, on ? 15 : 0);
+    if (on)
+        for (int ch = 2; ch <= 16; ++ch)
+            sendRpn(midi, ch, 0, 0, bendRange);
 }
 
 void NotaProcessor::releaseHeldNote(juce::MidiBuffer* midi)
@@ -128,11 +176,12 @@ void NotaProcessor::releaseHeldNote(juce::MidiBuffer* midi)
 
 void NotaProcessor::emit(const nota::EventList& events, juce::MidiBuffer& midi)
 {
-    const int ch = std::clamp(static_cast<int>(pChannel_->load()), 1, 16);
+    const int userChannel = std::clamp(static_cast<int>(pChannel_->load()), 1, 16);
 
     for (int i = 0; i < events.count; ++i)
     {
         const auto& e = events.events[i];
+        const int ch = e.channel != 0 ? static_cast<int>(e.channel) : userChannel; // MPE picks its own
         using T = nota::MidiEvent::Type;
         switch (e.type)
         {
@@ -143,7 +192,7 @@ void NotaProcessor::emit(const nota::EventList& events, juce::MidiBuffer& midi)
                 break;
             case T::NoteOff:
                 midi.addEvent(juce::MidiMessage::noteOff(ch, e.data1), e.sampleOffset);
-                if (heldNote_ == e.data1)
+                if (heldNote_ == e.data1 && heldChannel_ == ch)
                     heldNote_ = -1;
                 break;
             case T::PitchBend:
@@ -151,6 +200,9 @@ void NotaProcessor::emit(const nota::EventList& events, juce::MidiBuffer& midi)
                 break;
             case T::Cc:
                 midi.addEvent(juce::MidiMessage::controllerEvent(ch, e.data1, e.data2), e.sampleOffset);
+                break;
+            case T::ChannelPressure:
+                midi.addEvent(juce::MidiMessage::channelPressureChange(ch, e.data1), e.sampleOffset);
                 break;
         }
     }
@@ -168,6 +220,27 @@ void NotaProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     const int numIn = input.getNumChannels();
 
     engine_.setParams(readParams());
+
+    // Mode / zone configuration. Switching modes drops the note in flight (it lives on a different
+    // channel layout), then tells the receiver how many member channels to expect.
+    const bool mpe = pMode_->load() > 0.5f;
+    const int mpeRange = static_cast<int>(pMpeBend_->load());
+    if (mpe != mpeActive_ || configDirty_)
+    {
+        releaseHeldNote(&midi);
+        engine_.reset();
+        if (mpe || mpeActive_)
+            sendMpeConfig(midi, mpe, mpeRange);
+        mpeActive_ = mpe;
+        mpeRangeSent_ = mpeRange;
+        configDirty_ = false;
+    }
+    else if (mpe && mpeRange != mpeRangeSent_)
+    {
+        for (int ch = 2; ch <= 16; ++ch)
+            sendRpn(midi, ch, 0, 0, mpeRange);
+        mpeRangeSent_ = mpeRange;
+    }
 
     int done = 0;
     while (done < numSamples)
@@ -214,6 +287,7 @@ void NotaProcessor::processBlockBypassed(juce::AudioBuffer<float>&, juce::MidiBu
     midi.clear();
     releaseHeldNote(&midi);
     engine_.reset();
+    configDirty_ = true; // resend the zone setup when processing resumes
 }
 
 juce::AudioProcessorEditor* NotaProcessor::createEditor()
